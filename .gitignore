@@ -1,0 +1,11 @@
+.venv/
+venv/
+.venv-lint/
+.venv2/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.DS_Store
+plans/
+.cursor/
