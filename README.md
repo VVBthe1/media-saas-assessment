@@ -22,7 +22,7 @@ Start the stack:
 docker compose up --build
 ```
 
-**Test command** (brief lifecycle suite; stack must be up — second terminal if `up` is in the foreground):
+**Test command** (lifecycle suite; stack must be up — second terminal if `up` is in the foreground):
 
 ```bash
 docker compose --profile testing run --rm e2e
@@ -36,7 +36,7 @@ docker compose --profile testing run --rm check
 
 Rebuild `check` / `e2e` images after changing `tests/` or `scripts/` (`--build`).
 
-Use the default **simulator** at **`fail-rate=0`** (section 3 demos with other flags will break the lifecycle part).
+Use the default **simulator** at **`fail-rate=0`**. Custom flags in section 3 are incompatible with the lifecycle suite.
 
 ## 3. Components
 
@@ -80,7 +80,7 @@ The default `simulator` service uses **`--fail-rate=0`**, **`--min-delay-ms=0`**
 
 Flow for every consumed task: `in_progress` → optional delay → `done` or `failed` (never skip `in_progress`).
 
-**Demos** (custom fail-rate or delay — not compatible with e2e; stop the compose `simulator` first):
+**Custom fail-rate or delay** (not compatible with e2e; stop the compose `simulator` first):
 
 ```bash
 docker compose stop simulator
@@ -107,11 +107,11 @@ pip install -r requirements.txt   # asyncpg; skip if using a venv that already h
 python3 scripts/seed_failed_deploy.py '<tenant-uuid>'
 ```
 
-The automated e2e suite calls the same script; prefer `--fail-rate=1` for manual demos when you can.
+The e2e suite calls this script. `--fail-rate=1` drives the same failed deploy through the simulator.
 
 ### Publish progress to RabbitMQ (manual)
 
-Brief negative / messaging demos; stack up; **worker** must be running. Progress uses exchange `task_updates`, routing key `task.progress`, JSON body `update_id`, `task_id`, `status` (`in_progress` | `done` | `failed`). Full schema: [Messaging](#messaging).
+Negative and messaging cases; stack up; **worker** must be running. Progress uses exchange `task_updates`, routing key `task.progress`, JSON body `update_id`, `task_id`, `status` (`in_progress` | `done` | `failed`). Full schema: [Messaging](#messaging).
 
 ```bash
 # Host (published ports): needs aio-pika from requirements.txt
@@ -132,7 +132,7 @@ docker compose --profile testing run --rm e2e python scripts/publish_task_progre
 
 Use a **new** `--update-id` per distinct delivery; repeat the same id to test idempotency. Out-of-order cases (e.g. `in_progress` after `done`) are automated in `scripts/e2e_suite.py`.
 
-Restore the default simulator after a demo:
+Start the default simulator again:
 
 ```bash
 docker compose up -d simulator
@@ -142,7 +142,7 @@ docker compose up -d simulator
 
 ## 4. Local development
 
-Optional. Sections [1–2](#1-initial-setup) are the reviewer path (Docker only). Use this section to run services or scripts on your machine.
+Optional. Sections [1–2](#1-initial-setup) run everything in Docker. This section runs services or scripts on the host.
 
 ```bash
 python3 -m venv .venv
@@ -166,7 +166,7 @@ Pylint prints warnings and conventions; Docker `check` only fails on pylint **er
 
 #### Security scan (Bandit)
 
-The brief’s optional **security scanner** is [Bandit](https://bandit.readthedocs.io/) (`bandit==1.8.2` in `requirements-lint.txt`), run as part of `check`:
+The security scanner is [Bandit](https://bandit.readthedocs.io/) (`bandit==1.8.2` in `requirements-lint.txt`), run as part of `check`:
 
 ```bash
 bandit -r src -ll -q
@@ -281,7 +281,7 @@ flowchart LR
 
 The API handles tenant mutations and publishes tasks after commit. The simulator consumes new tasks and publishes progress. The worker consumes progress and updates tasks and tenants in Postgres.
 
-### State machines (Copied from brief for reference.)
+### State machines
 
 Task:
 
@@ -376,7 +376,7 @@ Which key deduplicates what
 
 Task publish messages are not deduplicated by a separate store: each successful API mutation creates one task with a new `id` and sends one message.
 
-Progress consumer (brief requirements):
+Progress consumer:
 
 - Idempotent: duplicate `update_id` is ignored after the first successful handling.
 - Order-tolerant: invalid or late steps do not move task or tenant backward; terminal tasks are not reopened.
@@ -408,7 +408,7 @@ All API error responses include:
 
 | Topic | Choice | Why |
 |-------|--------|-----|
-| Authentication / authorization | Out of scope | Brief focuses on provisioning state, concurrency, and messaging; API and broker are open on localhost for the exercise. A production service would add tenant-scoped auth, mTLS or credentials on the broker, and secrets management. |
+| Authentication / authorization | Out of scope | API and broker are open on localhost. A production service would add tenant-scoped auth, mTLS or credentials on the broker, and secrets management. |
 | HTTP error shape | `error.code` / `error.message` on all failures | Domain errors use that object only; validation adds FastAPI’s `detail` alongside it. |
 | When tasks are published | After DB `commit` | Task row and tenant state are durable before the broker sees the message. If the API crashes after commit but before publish, that task may exist in DB without a message (no separate “pending publish” table). |
 | Progress idempotency | `update_id` in `processed_updates` | Broker may deliver the same progress more than once. |
@@ -420,7 +420,7 @@ All API error responses include:
 | Worker errors | Retry temporary DB errors a few times with backoff; reject bad messages | Consumer keeps running; one bad message does not block the queue. |
 | Simulator | Separate process, CLI flags | `--fail-rate`, `--min-delay-ms`, `--max-delay-ms` for failure and delay without code changes. |
 | Persistence | Postgres data in a Compose volume | Tenants and tasks survive `docker compose` restarts. |
-| Security scan | Bandit in Docker `check` (see [Security scan (Bandit)](#security-scan-bandit)) | Brief quality gates; optional but wired with lint/format/tests. |
+| Security scan | Bandit in Docker `check` (see [Security scan (Bandit)](#security-scan-bandit)) | Wired with lint, format, and tests. |
 | Logging | `backend/logging_config.py` (`configure_logging`) | One timestamped format on stderr for `api`, `worker`, `simulator`, and uvicorn access lines so async steps are easy to line up in `docker compose logs`. |
 
 ### Assumptions
