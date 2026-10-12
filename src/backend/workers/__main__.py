@@ -3,7 +3,7 @@ import json
 import logging
 import uuid
 
-from aio_pika import ExchangeType
+from aio_pika import DeliveryMode, ExchangeType, Message
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, SQLAlchemyError
 
 from backend.broker import get_channel, get_connection
@@ -28,10 +28,24 @@ UNIQUE_VIOLATION = "23505"
 MAX_RETRIES = 5
 INITIAL_BACKOFF_S = 0.5
 MAX_BACKOFF_S = 30.0
+RETRY_COUNT_HEADER = "x-retry-count"
 
 
-class TransientProcessingError(Exception):
-    """Raised when in-process retries are exhausted; message should be requeued."""
+class RetriesExhausted(Exception):
+    """Raised when a progress message has used its retry budget."""
+
+
+def _retry_count(message) -> int:
+    headers = message.headers or {}
+    raw = headers.get(RETRY_COUNT_HEADER, 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _backoff_seconds(count: int) -> float:
+    return min(INITIAL_BACKOFF_S * (2**count), MAX_BACKOFF_S)
 
 
 async def main() -> None:
@@ -50,11 +64,11 @@ async def main() -> None:
         async with progress_queue.iterator() as queue_iter:
             async for message in queue_iter:
                 try:
-                    await handle_progress(message)
+                    await handle_progress(message, updates_exchange)
                     await message.ack()
-                except TransientProcessingError:
-                    logger.warning("giving up for now, will retry message")
-                    await message.reject(requeue=True)
+                except RetriesExhausted:
+                    logger.warning("retries exhausted, dropping message")
+                    await message.reject(requeue=False)
                 except (SQLAlchemyError, AppError):
                     logger.exception("could not process message, dropping")
                     await message.reject(requeue=False)
@@ -64,7 +78,11 @@ async def main() -> None:
                     await message.reject(requeue=False)
 
 
-async def handle_progress(message) -> None:
+async def handle_progress(message, exchange) -> None:
+    count = _retry_count(message)
+    if count >= MAX_RETRIES:
+        raise RetriesExhausted()
+
     try:
         body = json.loads(message.body.decode())
         update_id = body["update_id"]
@@ -80,44 +98,58 @@ async def handle_progress(message) -> None:
         logger.error("unknown status %r for task %s", status, task_id)
         return
 
-    delay = INITIAL_BACKOFF_S
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            await _persist_progress(update_id, task_id, task_status)
-            return
-        except TaskNotFound:
-            logger.error("no task %s", task_id)
-            return
-        except IntegrityError:
+    try:
+        await _persist_progress(update_id, task_id, task_status)
+    except TaskNotFound:
+        logger.error("no task %s", task_id)
+    except IntegrityError:
+        raise
+    except OperationalError as exc:
+        await _republish_or_exhaust(
+            message, exchange, count, exc, update_id=update_id, task_id=task_id
+        )
+    except DBAPIError as exc:
+        if not exc.connection_invalidated:
             raise
-        except OperationalError as exc:
-            if attempt >= MAX_RETRIES:
-                raise TransientProcessingError() from exc
-            logger.warning(
-                "retrying update %s for task %s (%s/%s): %s",
-                update_id,
-                task_id,
-                attempt,
-                MAX_RETRIES,
-                exc,
-            )
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, MAX_BACKOFF_S)
-        except DBAPIError as exc:
-            if not exc.connection_invalidated:
-                raise
-            if attempt >= MAX_RETRIES:
-                raise TransientProcessingError() from exc
-            logger.warning(
-                "retrying update %s for task %s (%s/%s): %s",
-                update_id,
-                task_id,
-                attempt,
-                MAX_RETRIES,
-                exc,
-            )
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, MAX_BACKOFF_S)
+        await _republish_or_exhaust(
+            message, exchange, count, exc, update_id=update_id, task_id=task_id
+        )
+
+
+async def _republish_or_exhaust(message, exchange, count, exc, *, update_id, task_id) -> None:
+    next_count = count + 1
+    if next_count >= MAX_RETRIES:
+        logger.warning(
+            "update %s for task %s failed after %s attempts: %s",
+            update_id,
+            task_id,
+            MAX_RETRIES,
+            exc,
+        )
+        raise RetriesExhausted() from exc
+
+    delay = _backoff_seconds(count)
+    logger.warning(
+        "retrying update %s for task %s in %.1fs (%s/%s): %s",
+        update_id,
+        task_id,
+        delay,
+        next_count,
+        MAX_RETRIES,
+        exc,
+    )
+    await asyncio.sleep(delay)
+    headers = dict(message.headers or {})
+    headers[RETRY_COUNT_HEADER] = next_count
+    await exchange.publish(
+        Message(
+            body=message.body,
+            content_type=message.content_type or "application/json",
+            delivery_mode=DeliveryMode.PERSISTENT,
+            headers=headers,
+        ),
+        routing_key=TASK_PROGRESS_ROUTING_KEY,
+    )
 
 
 async def _persist_progress(update_id: str, task_id: str, task_status: TaskStatus) -> None:

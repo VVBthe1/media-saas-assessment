@@ -380,7 +380,7 @@ Progress consumer:
 
 - Idempotent: duplicate `update_id` is ignored after the first successful handling.
 - Order-tolerant: invalid or late steps do not move task or tenant backward; terminal tasks are not reopened.
-- Resilient: transient DB errors are retried with backoff; malformed or permanently invalid messages are rejected so the consumer keeps running. Message consumption is at-least-once from RabbitMQ; idempotency handles redelivery.
+- Resilient: a transient database error waits (0.5s, doubling, capped at 30s), then the same body is published again with an `x-retry-count` header and the original is acknowledged. After 5 attempts the message is rejected and not requeued. Malformed or permanently invalid messages are rejected so the consumer keeps running. Message consumption is at-least-once from RabbitMQ; idempotency handles redelivery.
 
 Late or invalid progress (for example `in_progress` after `done`) does not change task or tenant state, per the task state diagram. A new `update_id` for such a message is still recorded in `processed_updates` so redelivery stays safe.
 
@@ -417,7 +417,7 @@ All API error responses include:
 | Tenant `version` | Bumped on PATCH, DELETE, and worker tenant status apply | Optimistic locking for API; worker status changes count as mutations. |
 | Concurrent PATCH | Update only if `version` still matches | Two PATCHes with the same `version` → one `202`, one `409` `tenant_version_conflict`. |
 | Concurrent create (same slug) | Unique `slug` | Two parallel creates → one `202`, one `409` `tenant_already_exists`. |
-| Worker errors | Retry temporary DB errors a few times with backoff; reject bad messages | Consumer keeps running; one bad message does not block the queue. |
+| Worker errors | On a transient DB error, wait, republish with `x-retry-count` incremented, then ack. The 5th failure is rejected and not requeued | The count lives on the message, so one failing update is not requeued forever. The wait is only that attempt's backoff. |
 | Simulator | Separate process, CLI flags | `--fail-rate`, `--min-delay-ms`, `--max-delay-ms` for failure and delay without code changes. |
 | Persistence | Postgres data in a Compose volume | Tenants and tasks survive `docker compose` restarts. |
 | Security scan | Bandit in Docker `check` (see [Security scan (Bandit)](#security-scan-bandit)) | Wired with lint, format, and tests. |
