@@ -1,0 +1,17 @@
+[MASTER]
+init-hook='import sys; sys.path.insert(0, "src")'
+
+[MESSAGES CONTROL]
+disable=
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    too-many-arguments,
+    duplicate-code,
+    import-error,
+    no-member,
+    not-callable
+
+[FORMAT]
+max-line-length=100
