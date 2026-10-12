@@ -46,7 +46,7 @@ COPY src/ src/
 COPY tests/ tests/
 COPY scripts/ scripts/
 
-CMD ["sh", "-c", "failed=0; black --check --line-length 100 src tests scripts/ || failed=1; pe=0; pylint src || pe=$?; if [ \"$pe\" -ne 0 ]; then if [ $((pe & 1)) -ne 0 ] || [ $((pe & 2)) -ne 0 ] || [ $((pe & 32)) -ne 0 ]; then failed=1; fi; fi; bandit -r src -ll -q || failed=1; PYTHONPATH=src pytest -q || failed=1; exit \"$failed\""]
+CMD ["sh", "-c", "failed=0; echo 'running black'; black --check --line-length 100 src tests scripts/ || failed=1; echo 'running pylint'; pe=0; pylint src || pe=$?; if [ \"$pe\" -ne 0 ]; then if [ $((pe & 1)) -ne 0 ] || [ $((pe & 2)) -ne 0 ] || [ $((pe & 32)) -ne 0 ]; then failed=1; fi; fi; echo 'running bandit'; bandit -r src -ll -q || failed=1; echo 'running pytest'; PYTHONPATH=src pytest -v || failed=1; exit \"$failed\""]
 
 FROM runtime AS e2e
 

@@ -159,7 +159,7 @@ pip install -r requirements-test.txt -r requirements-lint.txt
 black --check --line-length 100 src tests scripts/
 pylint src
 bandit -r src -ll -q
-PYTHONPATH=src pytest -q
+PYTHONPATH=src pytest -v
 ```
 
 Pylint prints warnings and conventions; Docker `check` only fails on pylint **errors/fatals** (not on warning-only exit codes) and still runs bandit and pytest afterward.
@@ -182,7 +182,7 @@ bandit -r src -ll -q
 
 A clean `check` run means Bandit reported no issues at the configured threshold. **Black** (format) and **pylint** (lint) are separate steps in the same command; they are not security scanners.
 
-Pytest only: `pip install -r requirements-test.txt` then `PYTHONPATH=src pytest -q`.
+Pytest only: `pip install -r requirements-test.txt` then `PYTHONPATH=src pytest -v`.
 
 In Docker (profile `testing`):
 
